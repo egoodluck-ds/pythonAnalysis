@@ -1,3 +1,5 @@
+from calendar import month
+
 import streamlit as st
 import pandas as pd
 
@@ -61,13 +63,18 @@ with col_title:
     )
 
 # ============================================================
-# CONSTANTS
+# ASSUMPTIONS (FIXED / READ-ONLY)
 # ============================================================
 TOTAL_TARGET = 1296
 SAMPLES_PER_VISIT = 2
+PROJECTION_START_MONTH = "May 2026"
+ACTIVE_SITES_AT_START = 18
+
+# Sampling frequency after change (fixed)
+NEW_FREQUENCY = 2  # Twice monthly
 
 # ============================================================
-# BUILD FULL TIMELINE (SAFE RANGE)
+# BUILD FULL TIMELINE (SAFE, EXTENDED)
 # ============================================================
 months_only = [
     "January", "February", "March", "April", "May", "June",
@@ -80,15 +87,14 @@ for year in range(2025, 2036):
         months.append(f"{m} {year}")
 
 # ============================================================
-# HISTORICAL BASELINE TABLE (AUG 2025 – APR 2026)
+# HISTORICAL BASELINE (AUG 2025 – APR 2026)
 # ============================================================
 def build_historical_table():
     rows = []
     remaining = TOTAL_TARGET
 
-    # Phase 1: Aug–Oct 2025 (15 sites)
-    phase1 = ["August 2025", "September 2025", "October 2025"]
-    for month in phase1:
+    # Aug–Oct 2025: 15 sites
+    for month in ["August 2025", "September 2025", "October 2025"]:
         monthly = 15 * 1 * SAMPLES_PER_VISIT
         remaining -= monthly
         rows.append({
@@ -100,13 +106,12 @@ def build_historical_table():
             "Status": "Historical"
         })
 
-    # Phase 2: Nov 2025–Apr 2026 (18 sites)
-    phase2 = [
+    # Nov 2025–Apr 2026: 18 sites
+    for month in [
         "November 2025", "December 2025",
         "January 2026", "February 2026",
         "March 2026", "April 2026"
-    ]
-    for month in phase2:
+    ]:
         monthly = 18 * 1 * SAMPLES_PER_VISIT
         remaining -= monthly
         rows.append({
@@ -123,41 +128,76 @@ def build_historical_table():
 hist_df, remaining_after_baseline = build_historical_table()
 
 # ============================================================
-# INPUT AREA (PROJECTIONS)
+# EXPECTATIONS (READ-ONLY)
 # ============================================================
-st.markdown("### Scenario Inputs (From May 2026 onward)")
+st.markdown("### Initial Plan (Investment Document)")
 
-proj_months = months[months.index("May 2026"):]
+e1, e2, e3 = st.columns(3)
+e1.metric("Targeted Total", f"{TOTAL_TARGET:,}")
+e2.metric("Sampling Frequency", "Twice Monthly")
+e3.metric("Number of States (Sites)", "7 (30)")
+st.markdown("**Note:** Sample counts assume 2 samples per visit (1 Grab | **1 Moore swabs**).")
+# ============================================================
+# CURRENT IMPLEMENTATION (READ-ONLY)
+# ============================================================
+st.markdown("### Implementation Details (Baseline)")
 
-colA, colB, colC = st.columns(3)
+b1, b2, b3, b4 = st.columns(4)
+b1.metric("Samples Collected", f"{TOTAL_TARGET - remaining_after_baseline:,}")
+b2.metric("Sampling Frequency", "Once Monthly")
+b3.metric("Number of States (Sites)", "4 (18)")
+b4.metric("Samples Remaining", f"{remaining_after_baseline:,}")
 
-with colA:
-    start_month = st.selectbox("Projection Start Month", proj_months)
-    base_sites = st.number_input("Sites at Start Month", min_value=1, value=18)
-with colB:
-    freq_label = st.selectbox("Sampling Frequency", ["Once", "Twice"])
-    base_frequency = 1 if freq_label == "Once" else 2
-    freq_change_month = st.selectbox("Month Frequency Changes", ["None"] + proj_months)
-with colC:
-    site_change_month = st.selectbox("Month New Sites Start", ["None"] + proj_months)
-    added_sites = st.number_input("Additional Sites", min_value=0, value=0)
+st.markdown("""
+**Note:**
+- August – October 2025: Samples were collected from **15 sites**
+- November 2025 – April 2026: Samples were collected from **18 sites**
+- Sampling frequency during this period was **once monthly** """)
 
+# ============================================================
+# SCENARIO CHANGES (EDITABLE)
+# ============================================================
+st.markdown("### Scenario Changes (What‑If Analysis)")
+
+proj_months = months[months.index(PROJECTION_START_MONTH):]
+
+c1, c2 , c3= st.columns(3)
+
+with c1:
+    freq_change_month = st.selectbox(
+        "Month Sampling Frequency Increases (Once → Twice)",
+        ["None"] + proj_months
+    )
+    st.caption("Sampling remains once monthly until the selected month.")
+
+with c2:
+    site_change_month = st.selectbox(
+        "Month New Sites Start",
+        ["None"] + proj_months
+    )
+with c3:
+    added_sites = st.number_input(
+        "Additional Sites",
+        min_value=0,
+        value=0
+    )
 # ============================================================
 # PROJECTION SIMULATION
 # ============================================================
+
 def simulate_projection(start_remaining):
     remaining = start_remaining
-    sites = base_sites
-    freq = base_frequency
+    sites = ACTIVE_SITES_AT_START
+    freq = 1  # Always start Once Monthly
 
-    idx = months.index(start_month)
+    idx = months.index(PROJECTION_START_MONTH)
     rows = []
 
     while remaining > 0 and idx < len(months):
         month = months[idx]
 
         if freq_change_month != "None" and month == freq_change_month:
-            freq = 2
+            freq = NEW_FREQUENCY
 
         if site_change_month != "None" and month == site_change_month:
             sites += added_sites
@@ -178,6 +218,7 @@ def simulate_projection(start_remaining):
 
     return pd.DataFrame(rows)
 
+
 proj_df = simulate_projection(remaining_after_baseline)
 
 # ============================================================
@@ -190,21 +231,29 @@ full_df = pd.concat([hist_df, proj_df], ignore_index=True)
 # ============================================================
 st.markdown("### Projection Summary")
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Total Target", f"{TOTAL_TARGET:,}")
-c2.metric("Baseline Collected", f"{TOTAL_TARGET - remaining_after_baseline:,}")
-c3.metric("Remaining at Start", f"{remaining_after_baseline:,}")
-
 completion_month = full_df.iloc[-1]["Month"]
-st.success(f"Expected Completion: **{completion_month}**")
-st.info(f"Total Duration Shown: {len(full_df)} months (Aug 2025 → completion)")
+duration_months = len(full_df)
+
+m1, m2 = st.columns(2)
+
+with m1:
+    st.metric(
+        label="Expected Completion Month",
+        value=completion_month
+    )
+
+with m2:
+    st.metric(
+        label="Total Duration",
+        value=f"{duration_months} months",
+        delta="Aug 2025 → " + completion_month
+    )
 
 # ============================================================
 # TABLE
 # ============================================================
 st.markdown("---")
 st.markdown("### Month‑by‑Month Projection (Including History)")
-st.dataframe(full_df, use_container_width=True)
+st.dataframe(full_df, width='stretch')
 
 st.caption("© NCDC / ESPN — Scenario‑Based Sample Projection Tool")
-
